@@ -115,7 +115,7 @@ class BitLinearOptimized(nn.Linear):
 
         # Initialize 1-bit quantized weights and store them as int8
         self.register_buffer(
-            "quantized_weights", BitLinear(self.weight.data).to(torch.int8)
+            "quantized_weights", BitLinear.quantize_tensor(self.weight.data).to(torch.int8)
         )
         # Clear the original weights to save memory
         del self.weight
