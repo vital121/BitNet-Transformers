@@ -8,7 +8,7 @@ python run_clm.py \
 --config_name='./bitllama-110M-config' \
 --tokenizer_name='beomi/llama-2-ko-7b' \
 --num_train_epochs=10 \
---block_size=1024 \
+--block_size=2048 \
 --per_device_train_batch_size=1 \
 --gradient_accumulation_steps=1 \
 --optim adafactor \
