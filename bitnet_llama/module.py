@@ -14,7 +14,7 @@ class BitLinearNaive(nn.Linear):
 
     def binarize_weights(self):
         alpha = self.weight.mean()
-        binarized_weights = torch.sign(self.weight - alpha)
+        binarized_weights = BitLinear.sign_zero(self.weight - alpha)
         return binarized_weights
 
     def quantize_activations(self, x, b=8):
@@ -57,9 +57,13 @@ class BitLinear(nn.Linear):
         self.num_groups = num_groups
         self.eps = 1e-5
 
+    @staticmethod
+    def sign_zero(x):
+        return (x > 0).to(torch.uint8) - (x < 0).to(torch.uint8)
+
     def ste_binarize(self, x):
         # Apply the sign function for binarization
-        binarized_x = torch.sign(x)
+        binarized_x = BitLinear.sign_zero(x)
         # Use STE: during backward pass, we bypass the binarization
         binarized_x = (binarized_x - x).detach() + x
         return binarized_x
@@ -125,7 +129,7 @@ class BitLinearOptimized(nn.Linear):
 
         # Initialize 1-bit quantized weights and store them as int8
         self.register_buffer(
-            "quantized_weights", torch.sign(self.weight.data).to(torch.int8)
+            "quantized_weights", BitLinear(self.weight.data).to(torch.int8)
         )
         # Clear the original weights to save memory
         del self.weight
@@ -138,7 +142,7 @@ class BitLinearOptimized(nn.Linear):
     @weight.setter
     def weight(self, value):
         # Update the quantized_weights when the weight property is set
-        self.quantized_weights.data = torch.sign(value).to(torch.int8)
+        self.quantized_weights.data = BitLinear.sign_zero(value)
 
     def dequantize_weights(self):
         # Convert quantized_weights back to bfloat16 and compute alpha for the weights
@@ -148,7 +152,7 @@ class BitLinearOptimized(nn.Linear):
 
     def ste_binarize(self, x):
         # Apply the sign function for binarization
-        binarized_x = torch.sign(x)
+        binarized_x = BitLinear.sign_zero(x)
         # Use STE: during backward pass, we bypass the binarization
         binarized_x = (binarized_x - x).detach() + x
         return binarized_x
