@@ -15,6 +15,7 @@ protobuf = "^4.25.3"
 evaluate = "^0.4.1"
 scikit-learn = "^1.4.1.post1"
 torch = "^2.2.1"
+wandb = "^0.16.3"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.8.0"
