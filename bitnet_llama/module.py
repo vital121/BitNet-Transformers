@@ -12,12 +12,10 @@ class BitLinearNaive(nn.Linear):
         self.num_groups = num_groups
         self.eps = 1e-5  # Small epsilon value to avoid division by zero and overflow
 
-    def binarize_weights(self):
-        alpha = self.weight.mean()
-        binarized_weights = BitLinear.sign_zero(self.weight - alpha)
-        return binarized_weights
+    def ternarize_weights(self):
+        return BitLinear.quantize_tensor(self.weight, self.eps)
 
-    def quantize_activations(self, x, b=8):
+    def quantize_activations(self, x: torch.Tensor, b: int = 8):
         Q_b = 2 ** (b - 1)
         gamma = x.abs().max()
         quantized_x = torch.clamp(
@@ -25,28 +23,15 @@ class BitLinearNaive(nn.Linear):
         )
         return quantized_x
 
-    def scale_activations(self, x, b=8):
-        Q_b = 2 ** (b - 1)
-        eta = x.min()
-        gamma = x.abs().max()
-        scaled_x = torch.clamp(
-            (x - eta) * Q_b / (gamma + self.eps), self.eps, Q_b - self.eps
-        )
-        return scaled_x
-
     def forward(self, input):
-        # Binarize weights
-        binarized_weights = self.binarize_weights()
+        # ternarize weights
+        ternarized_weights = self.ternarize_weights()
 
-        # Normal linear transformation with binarized weights
-        output = torch.nn.functional.linear(input, binarized_weights, self.bias)
+        # Normal linear transformation with ternarized weights
+        output = torch.nn.functional.linear(input, ternarized_weights, self.bias)
 
         # Quantize activations (before non-linear functions like ReLU)
         output = self.quantize_activations(output)
-
-        # For the sake of demonstration, we'll also include the scaling step.
-        # In practice, this would be done before a non-linear function in a forward pass.
-        output = self.scale_activations(output)
 
         return output
 
@@ -58,33 +43,34 @@ class BitLinear(nn.Linear):
         self.eps = 1e-5
 
     @staticmethod
-    def sign_zero(x):
-        return (x > 0).to(torch.uint8) - (x < 0).to(torch.uint8)
+    def quantize_tensor(x: torch.Tensor, eps: float):
+        return torch.clamp(
+            torch.round(x / (x.mean() + eps)),
+            -1,
+             1,
+        )
 
-    def ste_binarize(self, x):
-        # Apply the sign function for binarization
-        binarized_x = BitLinear.sign_zero(x)
-        # Use STE: during backward pass, we bypass the binarization
-        binarized_x = (binarized_x - x).detach() + x
-        return binarized_x
+    def ste_ternarize(self, x):
+        # Apply the sign function for ternarization
+        ternarized_x = BitLinear.quantize_tensor(x, self.eps)
+        # Use STE: during backward pass, we bypass the ternarization
+        ternarized_x = (ternarized_x - x).detach() + x
+        return ternarized_x
 
-    def binarize_weights_groupwise(self):
+    def ternarize_weights_groupwise(self):
         # Divide weights into groups
         group_size = self.weight.shape[0] // self.num_groups
-        binarized_weights = torch.zeros_like(self.weight)
+        ternarized_weights = torch.zeros_like(self.weight)
 
         for g in range(self.num_groups):
             start_idx = g * group_size
             end_idx = (g + 1) * group_size
             weight_group = self.weight[start_idx:end_idx]
 
-            # Binarize each group using STE
-            alpha_g = weight_group.mean()
-            binarized_weights[start_idx:end_idx] = self.ste_binarize(
-                weight_group - alpha_g
-            )
+            # Ternarize weights
+            ternarized_weights[start_idx:end_idx] = self.ste_ternarize(weight_group)
 
-        return binarized_weights
+        return ternarized_weights
 
     def quantize_activations_groupwise(self, x, b=8):
         Q_b = 2 ** (b - 1)
@@ -109,11 +95,11 @@ class BitLinear(nn.Linear):
         return quantized_x
 
     def forward(self, input):
-        # Binarize weights (group-wise) using STE
-        binarized_weights = self.binarize_weights_groupwise()
+        # ternarize weights (group-wise) using STE
+        ternarized_weights = self.ternarize_weights_groupwise()
 
-        # Normal linear transformation with binarized weights
-        output = torch.nn.functional.linear(input, binarized_weights, self.bias)
+        # Normal linear transformation with ternarized weights
+        output = torch.nn.functional.linear(input, ternarized_weights, self.bias)
 
         # Quantize activations group-wise
         output = self.quantize_activations_groupwise(output)
@@ -142,7 +128,7 @@ class BitLinearOptimized(nn.Linear):
     @weight.setter
     def weight(self, value):
         # Update the quantized_weights when the weight property is set
-        self.quantized_weights.data = BitLinear.sign_zero(value)
+        self.quantized_weights.data = BitLinear.quantize_tensor(value, self.eps)
 
     def dequantize_weights(self):
         # Convert quantized_weights back to bfloat16 and compute alpha for the weights
@@ -150,33 +136,30 @@ class BitLinearOptimized(nn.Linear):
         alpha = bfloat16_weights.mean()
         return bfloat16_weights * alpha
 
-    def ste_binarize(self, x):
-        # Apply the sign function for binarization
-        binarized_x = BitLinear.sign_zero(x)
-        # Use STE: during backward pass, we bypass the binarization
-        binarized_x = (binarized_x - x).detach() + x
-        return binarized_x
+    def ste_ternarize(self, x):
+        # Apply the sign function for ternarization
+        ternarized_x = BitLinear.quantize_tensor(x, self.eps)
+        # Use STE: during backward pass, we bypass the ternarization
+        ternarized_x = (ternarized_x - x).detach() + x
+        return ternarized_x
 
-    def binarize_weights_groupwise(self):
-        # Dequantize the weights before binarization
+    def ternarize_weights_groupwise(self):
+        # Dequantize the weights before ternarization
         weights = self.dequantize_weights()
 
         # Divide weights into groups
         group_size = weights.shape[0] // self.num_groups
-        binarized_weights = torch.zeros_like(weights)
+        ternarized_weights = torch.zeros_like(weights)
 
         for g in range(self.num_groups):
             start_idx = g * group_size
             end_idx = (g + 1) * group_size
             weight_group = weights[start_idx:end_idx]
 
-            # Binarize each group using STE
-            alpha_g = weight_group.mean()
-            binarized_weights[start_idx:end_idx] = self.ste_binarize(
-                weight_group - alpha_g
-            )
+            # ternarize each group using STE
+            ternarized_weights[start_idx:end_idx] = self.ste_ternarize(weight_group)
 
-        return binarized_weights
+        return ternarized_weights
 
     def quantize_activations_groupwise(self, x, b=8):
         Q_b = 2 ** (b - 1)
@@ -201,11 +184,11 @@ class BitLinearOptimized(nn.Linear):
         return quantized_x
 
     def forward(self, input):
-        # Binarize weights (group-wise) using STE
-        binarized_weights = self.binarize_weights_groupwise()
+        # ternarize weights (group-wise) using STE
+        ternarized_weights = self.ternarize_weights_groupwise()
 
-        # Normal linear transformation with binarized weights
-        output = torch.nn.functional.linear(input, binarized_weights, self.bias)
+        # Normal linear transformation with ternarized weights
+        output = torch.nn.functional.linear(input, ternarized_weights, self.bias)
 
         # Quantize activations group-wise
         output = self.quantize_activations_groupwise(output)
